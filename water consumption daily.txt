@@ -1,6 +1,6 @@
-----getAllByHourWiseWaterEnergyQuery----
-SELECT to_char(start_time, 'HH24')   time,
-       --to_char(start_time, 'DD, HH AM')  AS hourWise,
+--getAllByDayWiseWaterEnergyQuery:   
+SELECT to_char(start_time, 'DD MON YYYY') AS time,
+       --to_char(start_time, 'MON DD, YYYY') AS dateWise,
        device_device_id deviceId,
        name deviceName,
        sum(waterConsumption) waterConsumption
@@ -41,27 +41,23 @@ SELECT to_char(start_time, 'HH24')   time,
                                  JOIN device d
                                       ON dt.id = d.device_type_id
                                           AND dt.parent_id = 104 
-                                          AND d.unit_id = :unitId 
+                                          AND d.unit_id = :unitId
                                           --and d.input_type = 0
                                           AND d.is_active = 1
-                                 CROSS JOIN (SELECT LEVEL                                    sl,
-                                                    TO_TIMESTAMP( :targetDate  || '00:00:01', 'DD-MM-YYYY HH24:MI:SS') +
-                                                    (LEVEL - 1) *
-                                                    NUMTODSINTERVAL(60, 'MINUTE')         AS start_time,
-                                                    TO_TIMESTAMP( :targetDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS') +
-                                                    LEVEL * NUMTODSINTERVAL(60, 'MINUTE') AS end_time
-                                             FROM dual
-                                             CONNECT BY LEVEL <=
-                                                        (SELECT
-                                                             ((TO_DATE( :targetDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS') + 1) -
-                                                              TO_DATE( :targetDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS')) *
-                                                             1440 AS minute_difference
-                                                         FROM dual) / 60) tr) dtr
+                                 CROSS JOIN (select LEVEL sl,
+                                                    TO_TIMESTAMP( :fromDate  || '00:00:01', 'DD-MM-YYYY HH24:MI:SS') +
+                                                                                    (LEVEL - 1) *
+                                                                                    NUMTODSINTERVAL(1, 'DAY')         AS start_time,
+                                                    TO_TIMESTAMP( :fromDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS') +
+                                                                                    LEVEL * NUMTODSINTERVAL(1, 'DAY') AS end_time
+                                            from dual
+                                            connect by level <= TO_DATE( :toDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS') - TO_DATE( :fromDate  || '00:00:00', 'DD-MM-YYYY HH24:MI:SS') +1
+                                            ) tr) dtr
                            LEFT JOIN device_reading ehr
                                      ON dtr.id = ehr.device_id
                                          AND ehr.date_time BETWEEN dtr.start_time AND dtr.end_time
                                          AND ehr.WATER_CONSUMPTION > 0
-                  group by dtr.sl, dtr.device_device_id, dtr.name, start_time, end_time) dmv
+                  group by dtr.sl, dtr.device_device_id,dtr.name, start_time, end_time) dmv
                   left join (
                             SELECT *
                             FROM (SELECT device_id,
@@ -69,10 +65,10 @@ SELECT to_char(start_time, 'HH24')   time,
                                          WATER_CONSUMPTION                                                                                     water_pre_latest_data,
                                          ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY device_id, date_time DESC, WATER_CONSUMPTION DESC) boi_rnk
                                   FROM device_reading
-                                  WHERE date_time < TO_TIMESTAMP( :targetDate  || '00:00:01', 'DD-MM-YYYY HH24:MI:SS')
+                                  WHERE date_time < TO_TIMESTAMP( :fromDate  || '00:00:01', 'DD-MM-YYYY HH24:MI:SS')
                                     AND WATER_CONSUMPTION > 0)
                             WHERE boi_rnk = 1
                             ) pd
                             on dmv.device_device_id = pd.device_id))
 group by device_device_id,name,start_time, end_time
-order by device_device_id,to_char(start_time, 'HH24')
+order by device_device_id,start_time
