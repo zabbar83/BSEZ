@@ -1,0 +1,72 @@
+WITH status_data AS (SELECT device_id,
+                            device_status,
+                            last_updated_time,
+
+                            LEAD(device_status) OVER (
+                                PARTITION BY device_id
+                                ORDER BY last_updated_time
+                                ) AS next_status,
+
+                            LEAD(last_updated_time) OVER (
+                                PARTITION BY device_id
+                                ORDER BY last_updated_time
+                                ) AS next_time
+
+                     FROM dev_data_status_his
+
+                     WHERE last_updated_time >= TO_TIMESTAMP(
+                             :targetDate || ' 00:00:00',
+                             'YYYY-MM-DD HH24:MI:SS'
+                                                )
+
+                       AND last_updated_time <= TO_TIMESTAMP(
+                             :targetDate || ' 23:59:59',
+                             'YYYY-MM-DD HH24:MI:SS'
+                                                )),
+
+     inactive_summary AS (SELECT device_id,
+
+                                 COUNT(*) AS inactive_count,
+
+                                 NUMTODSINTERVAL(
+                                         SUM(
+                                                 EXTRACT(DAY FROM (next_time - last_updated_time)) * 86400
+                                                     +
+                                                 EXTRACT(HOUR FROM (next_time - last_updated_time)) * 3600
+                                                     +
+                                                 EXTRACT(MINUTE FROM (next_time - last_updated_time)) * 60
+                                                     +
+                                                 EXTRACT(SECOND FROM (next_time - last_updated_time))
+                                         ),
+                                         'SECOND'
+                                 )        AS total_inactive_duration
+
+                          FROM status_data
+
+                          WHERE device_status = 'INACTIVE'
+                            AND next_status = 'ACTIVE'
+
+                          GROUP BY device_id)
+
+SELECT DISTINCT sd.device_id                AS deviceId,
+
+                d.NAME                      AS deviceName,
+
+                NVL(isum.inactive_count, 0) AS inactiveCount,
+
+                NVL(
+                        to_char(isum.total_inactive_duration),
+                        to_char(NUMTODSINTERVAL(0, 'SECOND'))
+                )                           AS totalInactiveDuration
+
+FROM status_data sd
+
+         LEFT JOIN inactive_summary isum
+                   ON sd.device_id = isum.device_id
+
+         JOIN DEVICE d
+              ON sd.DEVICE_ID = d.ID
+
+WHERE d.UNIT_ID = :unitId
+
+ORDER BY sd.device_id
