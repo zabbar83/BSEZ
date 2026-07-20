@@ -1,0 +1,76 @@
+----getAllByMinuteWiseWaterEnergyQuery----
+SELECT  start_time startTime,
+        end_time endTime, 
+        SUM(CASE WHEN device_device_id = 5266 AND waterConsumption > 0 THEN waterConsumption ELSE 0 END) AS wwf_5266, 
+        SUM(CASE WHEN device_device_id IN ( 5266) AND waterConsumption > 0 THEN waterConsumption ELSE 0 END) AS totalWwf
+       from (SELECT sl,
+                   device_device_id,
+                   name,
+                   start_time,
+                   end_time,
+                   water_pre_latest_data,
+                   water_max_value,
+                   case
+                        when sl = 1 then water_max_value - water_pre_latest_data
+                        else water_max_value - nvl((LAG(water_max_value) OVER (PARTITION BY device_device_id ORDER BY device_device_id, sl)),0)
+                    end waterConsumption
+            FROM (SELECT
+                   sl,
+                   device_device_id,
+                   name,
+                   start_time,
+                   end_time,
+                   nvl(water_pre_latest_data,0) water_pre_latest_data,
+                   LAST_VALUE(case
+                        when sl = 1 and water_max_value is null then nvl(water_pre_latest_data,0)
+                        else water_max_value
+                   end IGNORE NULLS)
+                   OVER (PARTITION BY device_device_id ORDER BY sl ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) water_max_value
+            FROM (SELECT dtr.sl,
+                         dtr.device_device_id,
+                         dtr.name,
+                         start_time,
+                         end_time,
+                         LAST_VALUE(max(ehr.WATER_CONSUMPTION) IGNORE NULLS)
+                                    OVER (PARTITION BY device_device_id ORDER BY sl ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) water_max_value
+                  FROM (SELECT d.id device_device_id,
+                               d.*,
+                               tr.*
+                        FROM device_type dt
+                                 JOIN device d
+                                      ON dt.id = d.device_type_id
+                                      AND dt.parent_id = 104
+                                          AND d.unit_id = 1
+                                          and DEVICE_TYPE_ID = 1008
+                                          AND d.is_active = 1
+                                 CROSS JOIN (SELECT LEVEL                                                 sl,
+                                                    TO_TIMESTAMP( '2026-07-16 03:00' || ':01', 'YYYY-MM-DD HH24:MI:SS') +
+                                                    (LEVEL - 1) *
+                                                    NUMTODSINTERVAL( 30, 'MINUTE')         AS start_time,
+                                                    TO_TIMESTAMP( '2026-07-16 03:00' || ':00', 'YYYY-MM-DD HH24:MI:SS') +
+                                                    LEVEL * NUMTODSINTERVAL( 30, 'MINUTE') AS end_time
+                                             FROM dual
+                                             CONNECT BY LEVEL <=
+                                                        (SELECT (TO_DATE( '2026-07-16 06:00' || ':00', 'YYYY-MM-DD HH24:MI:SS') -
+                                                                 TO_DATE( '2026-07-16 03:00' || ':00', 'YYYY-MM-DD HH24:MI:SS')) *
+                                                                1440 AS minutes_difference
+                                                         FROM dual) / 30) tr) dtr
+                           LEFT JOIN device_reading ehr
+                                     ON dtr.id = ehr.device_id
+                                         AND ehr.date_time BETWEEN dtr.start_time AND dtr.end_time
+                                         AND ehr.WATER_CONSUMPTION > 0
+                  group by dtr.sl, dtr.device_device_id, dtr.name, start_time, end_time) dmv
+                  left join (
+                            SELECT *
+                            FROM (SELECT device_id,
+                                         date_time previous_latest_date_time,
+                                         WATER_CONSUMPTION water_pre_latest_data,
+                                         ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY device_id, date_time DESC, WATER_CONSUMPTION DESC) boi_rnk
+                                  FROM device_reading
+                                  WHERE date_time < TO_TIMESTAMP( '2026-07-16 03:00' || ':01', 'YYYY-MM-DD HH24:MI:SS')
+                                    AND WATER_CONSUMPTION > 0)
+                            WHERE boi_rnk = 1
+                            ) pd
+                            on dmv.device_device_id = pd.device_id))
+group by start_time, end_time
+order by start_time
